@@ -27,7 +27,7 @@ if (-not $AcrName) {
     if ([string]::IsNullOrWhiteSpace($AcrName)) { $AcrName = $defaultAcr }
 }
 
-$VM_SIZE = "Standard_D4s_v3"
+$VM_SIZE = "Standard_D2s_v3"
 $NODE_COUNT = 3
 $IMAGE_REPO = "nginx"
 $IMAGE_TAG = "Prod"
