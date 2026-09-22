@@ -10,23 +10,6 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-# ============================================================
-# AKS 3-Node / 6-Pod Lab
-# ============================================================
-# Creates/uses:
-#   - Resource Group in East US
-#   - ACR (Basic)
-#   - AKS with 3 Linux nodes across zones 1/2/3
-#   - Imports public nginx:alpine into ACR as nginx:Prod
-#   - Grants AKS permission to pull from ACR
-#   - Deploys 6 nginx StatefulSet Pods
-#   - Uses topology spread constraints to distribute them
-#   - Creates an Azure LoadBalancer Service
-#
-# The script supports both local interactive use and CI/CD.
-# GitHub Actions can call it with -NonInteractive and explicit names.
-# ============================================================
-
 if (-not $ResourceGroup) {
     if ($NonInteractive) { throw "ResourceGroup is required in non-interactive mode." }
     $ResourceGroup = Read-Host "Resource Group [rg-aks-3node-lab]"
@@ -51,6 +34,7 @@ $NODE_COUNT = 3
 $IMAGE_REPO = "nginx"
 $IMAGE_TAG = "Prod"
 $IMAGE = "$AcrName.azurecr.io/$IMAGE_REPO`:$IMAGE_TAG"
+
 $ManifestSource = Join-Path $PSScriptRoot "aks-3node-6pod-lab.yaml"
 $ManifestRendered = Join-Path $PSScriptRoot "aks-3node-6pod-lab.generated.yaml"
 
@@ -61,8 +45,9 @@ Write-Host "  AKS            : $AksName"
 Write-Host "  ACR            : $AcrName"
 Write-Host "  Image          : $IMAGE"
 Write-Host "  VM Size        : $VM_SIZE"
-Write-Host "  Nodes          : 3 (zones 1,2,3)"
+Write-Host "  Nodes          : $NODE_COUNT"
 Write-Host "  Web Pods       : 6"
+Write-Host "  Availability Zones : Not used"
 
 if (-not $NonInteractive) {
     $confirm = Read-Host "Continue? [Y/n]"
@@ -78,24 +63,40 @@ az account show --output none 2>$null
 if ($LASTEXITCODE -ne 0) {
     if ($NonInteractive) { throw "Azure CLI is not logged in." }
     az login | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "Azure login failed." }
 }
 
 Write-Host "[3/10] Checking AKS VM SKU availability in $Location..." -ForegroundColor Cyan
 az aks list-vm-skus --location $Location --size $VM_SIZE --all --output table
+if ($LASTEXITCODE -ne 0) {
+    throw "Could not verify AKS VM SKU availability in $Location. Stopping before resource creation."
+}
 
 Write-Host "[4/10] Creating Resource Group if needed..." -ForegroundColor Cyan
 az group create --name $ResourceGroup --location $Location --output none
+if ($LASTEXITCODE -ne 0) { throw "Failed to create or verify Resource Group '$ResourceGroup'." }
 
 Write-Host "[5/10] Creating ACR if needed..." -ForegroundColor Cyan
 $acrExists = az acr show --name $AcrName --resource-group $ResourceGroup --query id -o tsv 2>$null
 if (-not $acrExists) {
-    az acr create --resource-group $ResourceGroup --name $AcrName --location $Location --sku Basic --output none
-} else {
+    az acr create `
+        --resource-group $ResourceGroup `
+        --name $AcrName `
+        --location $Location `
+        --sku Basic `
+        --output none
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to create ACR '$AcrName'."
+    }
+}
+else {
     Write-Host "ACR already exists; reusing it." -ForegroundColor DarkGray
 }
 
-Write-Host "[6/10] Creating AKS if needed (3 nodes, zones 1/2/3)..." -ForegroundColor Cyan
+Write-Host "[6/10] Creating AKS if needed (3 nodes)..." -ForegroundColor Cyan
 $aksExists = az aks show --resource-group $ResourceGroup --name $AksName --query id -o tsv 2>$null
+
 if (-not $aksExists) {
     az aks create `
         --resource-group $ResourceGroup `
@@ -103,17 +104,29 @@ if (-not $aksExists) {
         --location $Location `
         --node-count $NODE_COUNT `
         --node-vm-size $VM_SIZE `
-        --zones 1 2 3 `
         --generate-ssh-keys `
         --network-plugin azure `
         --load-balancer-sku standard `
         --output none
-} else {
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "AKS cluster '$AksName' could not be created. Stopping deployment."
+    }
+}
+else {
     Write-Host "AKS already exists; reusing it." -ForegroundColor DarkGray
 }
 
 Write-Host "[7/10] Loading kubeconfig..." -ForegroundColor Cyan
-az aks get-credentials --resource-group $ResourceGroup --name $AksName --overwrite-existing --output none
+az aks get-credentials `
+    --resource-group $ResourceGroup `
+    --name $AksName `
+    --overwrite-existing `
+    --output none
+
+if ($LASTEXITCODE -ne 0) {
+    throw "Failed to retrieve kubeconfig for AKS cluster '$AksName'."
+}
 
 Write-Host "[8/10] Importing nginx:alpine into ACR as nginx:Prod..." -ForegroundColor Cyan
 az acr import `
@@ -123,12 +136,20 @@ az acr import `
     --force `
     --output none
 
+if ($LASTEXITCODE -ne 0) {
+    throw "Failed to import nginx:alpine into ACR '$AcrName'."
+}
+
 Write-Host "[9/10] Granting AKS ACR pull permission..." -ForegroundColor Cyan
 az aks update `
     --resource-group $ResourceGroup `
     --name $AksName `
     --attach-acr $AcrName `
     --output none
+
+if ($LASTEXITCODE -ne 0) {
+    throw "Failed to grant AKS permission to pull from ACR '$AcrName'."
+}
 
 if (-not (Test-Path $ManifestSource)) {
     throw "Cannot find $ManifestSource. Keep aks-3node-6pod-lab.yaml beside this script."
@@ -138,10 +159,17 @@ Write-Host "[10/10] Rendering and applying Kubernetes manifest..." -ForegroundCo
 $yaml = Get-Content -Raw -Path $ManifestSource
 $yaml = $yaml.Replace("__IMAGE__", $IMAGE)
 Set-Content -Path $ManifestRendered -Value $yaml -Encoding UTF8
+
 kubectl apply -f $ManifestRendered
+if ($LASTEXITCODE -ne 0) {
+    throw "kubectl failed to apply the Kubernetes manifest."
+}
 
 Write-Host "`nWaiting for all six Pods..." -ForegroundColor Cyan
 kubectl rollout status statefulset/demo-web -n aks-web-lab --timeout=15m
+if ($LASTEXITCODE -ne 0) {
+    throw "The demo-web StatefulSet did not become ready."
+}
 
 Write-Host "`n=== Nodes ===" -ForegroundColor Yellow
 kubectl get nodes -o wide
@@ -156,10 +184,12 @@ Write-Host "`n=== Endpoint distribution ===" -ForegroundColor Yellow
 kubectl get endpoints demo-web -n aks-web-lab
 
 $externalIP = kubectl get svc demo-web -n aks-web-lab -o jsonpath='{.status.loadBalancer.ingress[0].ip}'
+
 Write-Host ""
 if ($externalIP) {
     Write-Host "Landing page: http://$externalIP" -ForegroundColor Green
-} else {
+}
+else {
     Write-Host "LoadBalancer IP is still pending. Run:"
     Write-Host "kubectl get svc demo-web -n aks-web-lab -w"
 }
