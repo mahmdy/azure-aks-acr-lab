@@ -1,6 +1,18 @@
 # Azure AKS + ACR Lab
 
-Hands-on Azure Kubernetes Service (AKS) lab integrating Azure Container Registry (ACR), StatefulSets, multi-node Pod distribution, Availability Zones, and Azure Load Balancer.
+Hands-on Azure Kubernetes Service (AKS) lab integrating Azure Container Registry (ACR), StatefulSets, multi-node Pod distribution, topology spread constraints, and an Azure Load Balancer.
+
+The lab uses:
+
+- Azure East US
+- 3 AKS nodes
+- 6 application Pods
+- `Standard_D2s_v3` nodes (2 vCPU / 8 GiB each)
+- ACR image `nginx:Prod`
+- StatefulSet with stable Pod names `demo-web-0` ... `demo-web-5`
+- Public `LoadBalancer` Service
+- GitHub Actions + Azure OIDC
+- No Availability Zone dependency; Pod spreading is based on Kubernetes node hostname
 
 This project can be deployed in two ways:
 
@@ -11,7 +23,7 @@ The GitHub workflow is the recommended way to demonstrate the automation side of
 
 ---
 
-## Architecture
+# Architecture
 
 ```text
                          GitHub Repository
@@ -26,13 +38,12 @@ The GitHub workflow is the recommended way to demonstrate the automation side of
                  |                             |
                  v                             v
                 ACR                           AKS
-          nginx:Prod                 3 Nodes / 3 Zones
+          nginx:Prod                       3 Nodes
                                              |
                          +-------------------+-------------------+
                          |                   |                   |
                          v                   v                   v
                        Node 1             Node 2             Node 3
-                       Zone 1             Zone 2             Zone 3
                          |                   |                   |
                          +-------------------+-------------------+
                                              |
@@ -41,6 +52,9 @@ The GitHub workflow is the recommended way to demonstrate the automation side of
                                              |
                                              v
                                     LoadBalancer Service
+                                             |
+                                             v
+                                    Azure Public IP
                                              |
                                              v
                                           Internet
@@ -75,7 +89,32 @@ Kubernetes Service (LoadBalancer)
 Azure Public Load Balancer
 ```
 
-Each landing page identifies the Pod, Pod sequence, Pod IP, Node, Availability Zone, and image reference. This makes scheduling and load balancing visible during the lab.
+Each landing page identifies the Pod, Pod sequence, Pod IP, Node, and image reference. This makes scheduling and load balancing visible during the lab.
+
+---
+
+# What You Will Learn
+
+This lab combines the following concepts in one end-to-end exercise:
+
+1. Azure Resource Groups
+2. Azure Container Registry
+3. Azure Kubernetes Service
+4. AKS node pools and VM sizing
+5. Kubernetes Namespaces
+6. ConfigMaps
+7. StatefulSets
+8. Stable StatefulSet Pod identities
+9. Services and Endpoints
+10. Azure Load Balancer
+11. Topology spread constraints
+12. Pod self-healing
+13. Node cordon and drain
+14. Pod rescheduling after node disruption
+15. GitHub Actions
+16. GitHub OIDC authentication to Azure
+17. AKS-to-ACR authentication
+18. Automated deployment and cleanup
 
 ---
 
@@ -103,12 +142,27 @@ Kubernetes manifest containing:
 - ConfigMap containing the landing-page startup script
 - Headless Service required by the StatefulSet
 - 6-replica StatefulSet
-- Topology spread constraints
+- Topology spread constraint using `kubernetes.io/hostname`
 - Public `LoadBalancer` Service
+
+The manifest does **not** require Azure Availability Zones.
 
 ### `deploy-aks-3node-6pod-lab.ps1`
 
-The reusable deployment automation. It supports both interactive local execution and non-interactive GitHub Actions execution.
+Reusable deployment automation. It supports both interactive local execution and non-interactive GitHub Actions execution.
+
+The script:
+
+- Creates or reuses the Resource Group
+- Creates or reuses ACR
+- Creates or reuses AKS
+- Uses `Standard_D2s_v3` for the 3-node lab
+- Imports `nginx:alpine` into ACR as `nginx:Prod`
+- Attaches ACR to AKS
+- Renders the Kubernetes manifest by replacing `__IMAGE__` with the actual ACR image
+- Applies the rendered manifest
+- Waits for the StatefulSet rollout
+- Verifies Nodes, Pods, Service, and endpoints
 
 ### `setup-github-azure-oidc.ps1`
 
@@ -141,6 +195,8 @@ That makes the Pod sequence easy to demonstrate on the landing page.
 
 The Node hosting a Pod is not part of that identity. If a Pod is recreated, Kubernetes can place it on another suitable Node while keeping the StatefulSet ordinal.
 
+For example, `demo-web-2` can be recreated on a different Node and will still be named `demo-web-2`.
+
 ---
 
 # Why Three Nodes and Six Pods?
@@ -152,7 +208,7 @@ The lab intentionally uses:
 6 application Pods
 ```
 
-The target distribution is approximately:
+The normal target distribution is approximately:
 
 ```text
 Node 1 -> 2 Pods
@@ -160,14 +216,31 @@ Node 2 -> 2 Pods
 Node 3 -> 2 Pods
 ```
 
-The manifest uses `topologySpreadConstraints` to request balanced placement across:
+The manifest uses a topology spread constraint based on:
 
-- `topology.kubernetes.io/zone`
-- `kubernetes.io/hostname`
+```text
+kubernetes.io/hostname
+```
 
-The Kubernetes scheduler makes the final placement decision.
+This asks the Kubernetes scheduler to keep the Pods reasonably balanced across the three Nodes.
 
-Do not treat the exact Pod-to-Node mapping as permanent. Pod recreation can result in a different Node assignment.
+The lab does **not** use:
+
+```text
+topology.kubernetes.io/zone
+```
+
+because Availability Zones are not required for this exercise.
+
+The topology constraint uses:
+
+```yaml
+whenUnsatisfiable: ScheduleAnyway
+```
+
+This is intentional. It allows Kubernetes to continue scheduling Pods when perfect spreading is not possible—for example, when one Node becomes unavailable. The scheduler still tries to keep the workload balanced, but availability is not blocked by the spreading preference.
+
+Do not treat the exact Pod-to-Node mapping as permanent. Pod recreation and Node disruption can result in a different mapping.
 
 ---
 
@@ -179,15 +252,16 @@ Default configuration:
 |---|---|
 | Region | East US |
 | AKS Nodes | 3 |
-| Availability Zones | 1, 2, 3 |
-| Node VM size | `Standard_D4s_v5` |
+| Node VM size | `Standard_D2s_v3` |
+| Total lab node capacity | 6 vCPU / 24 GiB |
 | Application replicas | 6 |
 | Container image | NGINX |
 | ACR tag | `Prod` |
 | Kubernetes workload | StatefulSet |
 | External Service | LoadBalancer |
+| Availability Zone dependency | None |
 
-The node size is deliberately kept small for a lab while meeting the requirements of an AKS system node pool. Azure recommends using supported VM sizes for AKS system pools; B-series is not the target SKU for this exercise.
+The `Standard_D2s_v3` size provides 2 vCPUs and 8 GiB memory per Node. Three Nodes therefore use 6 vCPUs in total, which keeps the lab within the subscription quota used for this exercise.
 
 ---
 
@@ -281,17 +355,19 @@ The script automatically:
 
 1. Checks Azure CLI.
 2. Checks Azure authentication.
-3. Checks the selected AKS VM SKU.
-4. Creates/reuses the Resource Group.
-5. Creates/reuses the ACR.
-6. Creates/reuses the AKS cluster.
-7. Gets AKS credentials.
-8. Imports `nginx:alpine` into ACR as `nginx:Prod`.
-9. Attaches the ACR to AKS.
-10. Renders and applies the Kubernetes manifest.
+3. Creates/reuses the Resource Group.
+4. Creates/reuses the ACR.
+5. Creates/reuses the AKS cluster.
+6. Gets AKS credentials.
+7. Imports `nginx:alpine` into ACR as `nginx:Prod`.
+8. Attaches the ACR to AKS.
+9. Renders the Kubernetes manifest and replaces `__IMAGE__`.
+10. Applies the rendered Kubernetes manifest.
 11. Waits for all six Pods.
 12. Displays Nodes, Pods, Service, and endpoints.
 13. Prints the LoadBalancer landing-page URL when available.
+
+The current automation does not perform the earlier experimental AKS VM SKU pre-check.
 
 ---
 
@@ -299,7 +375,7 @@ The script automatically:
 
 This is the recommended automated path.
 
-The workflow does **not** store an Azure client secret in GitHub. Instead, GitHub Actions requests a short-lived OIDC token and Azure trusts the configured federated identity. GitHub documents OIDC as a way to authenticate to Azure without long-lived Azure credentials stored as secrets.
+The workflow does **not** store an Azure client secret in GitHub. Instead, GitHub Actions requests a short-lived OIDC token and Azure trusts the configured federated identity.
 
 The workflow requires:
 
@@ -356,13 +432,6 @@ Lab Resource Group
 GitHub repository (OWNER/REPO)
 ```
 
-Example:
-
-```text
-Lab Resource Group [rg-aks-3node-lab]: rg-aks-3node-lab
-GitHub repository (OWNER/REPO): YOUR-USER/azure-aks-acr-lab
-```
-
 The script then:
 
 1. Creates the lab Resource Group in East US.
@@ -370,10 +439,8 @@ The script then:
 3. Creates a Microsoft Entra application/service principal.
 4. Grants the application `Contributor` on the lab Resource Group.
 5. Grants `User Access Administrator` on the lab Resource Group so the workflow can create the ACR pull role assignment needed by AKS.
-6. Creates a GitHub OIDC federated credential bound to the repository's immutable identity and the `main` branch.
+6. Creates a GitHub OIDC federated credential bound to the repository identity and `main` branch.
 7. Prints the three values required as GitHub Actions secrets.
-
-GitHub repositories created after July 15, 2026 use immutable default OIDC subjects containing owner and repository IDs. The bootstrap script uses those IDs so the trust relationship is not based only on a mutable repository name.
 
 ---
 
@@ -388,7 +455,7 @@ Settings
   -> New repository secret
 ```
 
-Create these three secrets using the values printed by the bootstrap script:
+Create:
 
 ```text
 AZURE_CLIENT_ID
@@ -446,14 +513,6 @@ eastus
 ```
 
 The Resource Group should be the one prepared by the OIDC bootstrap script because that is where the GitHub identity has its Azure permissions.
-
-Click:
-
-```text
-Run workflow
-```
-
-No Azure login is required on your PC for the workflow itself.
 
 ---
 
@@ -603,9 +662,10 @@ Pod Sequence:       3
 Pod Name:           demo-web-3
 Pod IP:             10.244.x.x
 Node:               aks-...-vmss000001
-Availability Zone:  2
 Image:              acr...azurecr.io/nginx:Prod
 ```
+
+The landing page does not display an Availability Zone because the lab does not depend on Availability Zones.
 
 ---
 
@@ -618,7 +678,7 @@ $IP="<EXTERNAL-IP>"
 
 for ($i=1; $i -le 20; $i++) {
     Write-Host "Request $i"
-    curl.exe -s --no-keepalive "http://$IP"
+    curl.exe -s --no-keep-alive "http://$IP"
     Write-Host ""
 }
 ```
@@ -635,7 +695,7 @@ Do not expect strict round-robin behavior. The purpose of the test is to observe
 kubectl get pods -n aks-web-lab -o wide
 ```
 
-Or a focused view:
+Or:
 
 ```powershell
 kubectl get pods -n aks-web-lab `
@@ -654,7 +714,7 @@ The Service itself is not a Pod and is not assigned to one particular Node in th
 
 ---
 
-# Test StatefulSet Self-Healing
+# Hands-On Exercise 1 — StatefulSet Self-Healing
 
 Delete one Pod:
 
@@ -662,7 +722,7 @@ Delete one Pod:
 kubectl delete pod demo-web-0 -n aks-web-lab
 ```
 
-Watch the replacement:
+Watch:
 
 ```powershell
 kubectl get pods -n aks-web-lab -w
@@ -676,9 +736,169 @@ demo-web-0
 
 The identity remains `demo-web-0`, but the replacement may be scheduled on a different suitable Node.
 
+Check the new placement:
+
+```powershell
+kubectl get pods -n aks-web-lab -o wide
+```
+
+---
+
+# Hands-On Exercise 2 — Cordon a Node
+
+A cordon prevents **new** Pods from being scheduled on a Node. It does not evict existing Pods.
+
+First inspect Nodes:
+
+```powershell
+kubectl get nodes
+```
+
+Choose one Node and cordon it:
+
+```powershell
+kubectl cordon <NODE_NAME>
+```
+
+Verify:
+
+```powershell
+kubectl get nodes
+```
+
+You should see:
+
+```text
+Ready,SchedulingDisabled
+```
+
+Existing Pods on the Node continue running.
+
+Uncordon when finished:
+
+```powershell
+kubectl uncordon <NODE_NAME>
+```
+
+---
+
+# Hands-On Exercise 3 — Drain a Node
+
+A drain evicts eligible workload Pods so that they can be recreated elsewhere.
+
+Inspect the Pods first:
+
+```powershell
+kubectl get pods -n aks-web-lab -o wide
+```
+
+Drain the selected Node:
+
+```powershell
+kubectl drain <NODE_NAME> --ignore-daemonsets --delete-emptydir-data
+```
+
+Watch the StatefulSet:
+
+```powershell
+kubectl get pods -n aks-web-lab -o wide -w
+```
+
+Because the topology constraint uses `ScheduleAnyway`, Kubernetes can continue scheduling replacement Pods even when perfect three-way spreading is temporarily impossible.
+
+When the exercise is complete:
+
+```powershell
+kubectl uncordon <NODE_NAME>
+```
+
+Then verify:
+
+```powershell
+kubectl get nodes
+kubectl get pods -n aks-web-lab -o wide
+```
+
+---
+
+# Hands-On Exercise 4 — Observe Node Failure Behavior
+
+The purpose of this exercise is to understand the difference between:
+
+- Pod failure
+- Node scheduling restriction
+- Node drain
+- Actual Node unavailability
+
+A real Node failure can temporarily leave its Pods unavailable while Kubernetes detects the failure and recreates/reschedules workloads.
+
+Check the workload:
+
+```powershell
+kubectl get pods -n aks-web-lab -o wide
+```
+
+Check Node conditions:
+
+```powershell
+kubectl get nodes
+kubectl describe node <NODE_NAME>
+```
+
+The important lesson is that a StatefulSet preserves the Pod's ordinal identity, while Kubernetes is responsible for deciding where the replacement Pod runs.
+
 ---
 
 # Troubleshooting
+
+## Wrong or stale kubectl context
+
+If `kubectl` points to an old AKS cluster or an unreachable API endpoint, refresh the credentials:
+
+```powershell
+az aks get-credentials `
+  --resource-group rg-aks-3node-lab `
+  --name aks-3node-lab `
+  --overwrite-existing
+```
+
+Then verify:
+
+```powershell
+kubectl get nodes -o wide
+```
+
+This is especially useful when the AKS cluster has been recreated.
+
+## `InvalidImageName`
+
+If a Pod reports:
+
+```text
+InvalidImageName
+```
+
+inspect the actual image stored in the StatefulSet template:
+
+```powershell
+kubectl get statefulset demo-web -n aks-web-lab -o jsonpath="{.spec.template.spec.containers[0].image}"
+```
+
+The value should look similar to:
+
+```text
+<ACR_NAME>.azurecr.io/nginx:Prod
+```
+
+It should **not** still contain:
+
+```text
+__IMAGE__
+```
+
+The deployment script is responsible for replacing `__IMAGE__` before applying the manifest.
+
+After correcting the repository source files, rerun the GitHub deployment workflow rather than manually editing the live StatefulSet.
 
 ## `ImagePullBackOff`
 
@@ -698,7 +918,7 @@ A common ACR error is:
 
 This indicates an ACR authentication/authorization problem.
 
-Check the AKS-to-ACR integration:
+Check the AKS kubelet identity:
 
 ```powershell
 az aks show `
@@ -721,9 +941,9 @@ kubectl get service demo-web -n aks-web-lab -w
 kubectl describe pod <POD_NAME> -n aks-web-lab
 ```
 
-Look at `Events` for scheduling or resource problems.
+Look at `Events` for scheduling, topology, or resource problems.
 
-## Pods are not balanced
+## Pods are not perfectly balanced
 
 Inspect:
 
@@ -731,13 +951,9 @@ Inspect:
 kubectl get pods -n aks-web-lab -o wide
 ```
 
-and:
+The topology constraint is a scheduling rule, not a permanent Pod-to-Node assignment.
 
-```powershell
-kubectl get nodes --show-labels
-```
-
-The topology constraints are scheduling constraints, not a guarantee that a specific StatefulSet ordinal permanently belongs to a specific Node.
+With `ScheduleAnyway`, Kubernetes is allowed to accept less-than-perfect spreading when required to keep Pods schedulable.
 
 ## GitHub Azure login fails
 
@@ -747,10 +963,8 @@ Verify:
 - `AZURE_TENANT_ID`
 - `AZURE_SUBSCRIPTION_ID`
 - The workflow contains `id-token: write`.
-- The federated credential matches this repository and the `main` branch.
-- The repository is using the immutable subject configuration expected by the bootstrap script.
-
-Also verify the Azure role assignments on the lab Resource Group.
+- The federated credential matches the repository and `main` branch.
+- The Azure role assignments still exist on the lab Resource Group.
 
 ---
 
@@ -787,15 +1001,15 @@ The workflow will:
 2. Delete the AKS cluster.
 3. Wait for AKS deletion.
 4. Delete the ACR.
-5. Preserve the Resource Group and its OIDC role assignments.
+5. Verify that the Resource Group remains.
 
-The Resource Group itself has no compute charge. Keeping it allows the next GitHub deployment to reuse the same OIDC permissions.
+The Resource Group itself is intentionally preserved so the existing GitHub OIDC role assignments can be reused for the next deployment.
 
 ---
 
 # Full Manual Cleanup
 
-If you intentionally want to remove the Resource Group too, you can do it locally:
+If you intentionally want to remove the Resource Group too:
 
 ```powershell
 az group delete `
@@ -899,7 +1113,7 @@ After completing this project, you should be able to explain:
 1. What Azure Container Registry does.
 2. How AKS authenticates to ACR.
 3. How GitHub Actions authenticates to Azure using OIDC.
-4. Why OIDC is preferable to long-lived cloud credentials for this workflow.
+4. Why OIDC avoids long-lived cloud credentials in GitHub.
 5. What a StatefulSet is.
 6. Why StatefulSet Pods have stable ordinal names.
 7. How six Pods are distributed across three Nodes.
@@ -909,8 +1123,11 @@ After completing this project, you should be able to explain:
 11. How a LoadBalancer Service exposes an application through Azure.
 12. How multiple HTTP requests can reach different replicas.
 13. How Kubernetes recreates a deleted StatefulSet Pod.
-14. How GitHub Actions can automate Azure infrastructure and Kubernetes deployment.
-15. How to inspect Nodes, Pods, Services, and endpoints with `kubectl`.
+14. The difference between cordon and drain.
+15. How workload Pods can be rescheduled when a Node becomes unavailable.
+16. How GitHub Actions can automate Azure infrastructure and Kubernetes deployment.
+17. How to inspect Nodes, Pods, Services, and endpoints with `kubectl`.
+18. How automated cleanup can remove AKS and ACR while preserving the OIDC Resource Group.
 
 ---
 
@@ -932,6 +1149,7 @@ For production use, review at least:
 - Cost controls and budgets.
 - Image signing and provenance.
 - Deployment by immutable image digest instead of a mutable tag such as `Prod`.
+- High-availability requirements and Availability Zone design where appropriate.
 
 The public LoadBalancer is intentional for this lab so that the landing page can be accessed directly from the Internet.
 
@@ -940,7 +1158,7 @@ The public LoadBalancer is intentional for this lab so that the landing page can
 # References
 
 - GitHub Actions OIDC with Azure: https://docs.github.com/en/actions/how-tos/secure-your-work/security-harden-deployments/oidc-in-azure
-- GitHub OIDC reference and immutable subjects: https://docs.github.com/en/actions/reference/security/oidc
+- GitHub OIDC reference: https://docs.github.com/en/actions/reference/security/oidc
 - Microsoft Entra federated identity credentials: https://learn.microsoft.com/en-us/entra/workload-id/workload-identity-federation-create-trust
 - Azure AKS managed identities: https://learn.microsoft.com/en-us/azure/aks/managed-identity-overview
 - AKS / ACR integration: https://learn.microsoft.com/en-us/azure/aks/cluster-container-registry-integration
