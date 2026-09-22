@@ -1,1 +1,91 @@
+name: Cleanup AKS ACR Lab
 
+on:
+  workflow_dispatch:
+    inputs:
+      resource_group:
+        description: "Lab Resource Group (preserved so OIDC permissions remain available)"
+        required: true
+        default: "rg-aks-3node-lab"
+        type: string
+      aks_name:
+        description: "AKS cluster name to delete"
+        required: true
+        default: "aks-3node-lab"
+        type: string
+      acr_name:
+        description: "ACR name to delete"
+        required: true
+        type: string
+      confirm:
+        description: "Type DELETE to confirm AKS and ACR deletion"
+        required: true
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  cleanup:
+    name: Delete AKS and ACR
+    if: ${{ inputs.confirm == 'DELETE' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Azure login with OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Show resources before deletion
+        shell: bash
+        run: |
+          az group show --name "${{ inputs.resource_group }}" --output table
+          az resource list --resource-group "${{ inputs.resource_group }}" --output table
+
+      - name: Delete AKS cluster
+        shell: bash
+        run: |
+          if az aks show --resource-group "${{ inputs.resource_group }}" --name "${{ inputs.aks_name }}" --query id -o tsv >/dev/null 2>&1; then
+            az aks delete \
+              --resource-group "${{ inputs.resource_group }}" \
+              --name "${{ inputs.aks_name }}" \
+              --yes \
+              --no-wait
+          else
+            echo "AKS cluster not found; skipping."
+          fi
+
+      - name: Wait for AKS deletion
+        shell: bash
+        run: |
+          for i in {1..60}; do
+            if az aks show --resource-group "${{ inputs.resource_group }}" --name "${{ inputs.aks_name }}" >/dev/null 2>&1; then
+              echo "Waiting for AKS deletion..."
+              sleep 15
+            else
+              echo "AKS deletion completed."
+              break
+            fi
+          done
+
+      - name: Delete ACR
+        shell: bash
+        run: |
+          if az acr show --resource-group "${{ inputs.resource_group }}" --name "${{ inputs.acr_name }}" --query id -o tsv >/dev/null 2>&1; then
+            az acr delete \
+              --resource-group "${{ inputs.resource_group }}" \
+              --name "${{ inputs.acr_name }}" \
+              --yes
+          else
+            echo "ACR not found; skipping."
+          fi
+
+      - name: Verify Resource Group remains
+        shell: bash
+        run: |
+          echo "The Resource Group is intentionally preserved so the GitHub OIDC role assignments remain available for the next deployment."
+          az resource list --resource-group "${{ inputs.resource_group }}" --output table

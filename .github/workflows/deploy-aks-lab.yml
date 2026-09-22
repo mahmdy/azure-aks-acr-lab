@@ -1,0 +1,102 @@
+name: Deploy AKS ACR Lab
+
+on:
+  workflow_dispatch:
+    inputs:
+      resource_group:
+        description: "Existing Azure Resource Group prepared for GitHub OIDC"
+        required: true
+        default: "rg-aks-3node-lab"
+        type: string
+      aks_name:
+        description: "AKS cluster name"
+        required: true
+        default: "aks-3node-lab"
+        type: string
+      acr_name:
+        description: "Globally unique ACR name (lowercase)"
+        required: true
+        type: string
+      location:
+        description: "Azure region"
+        required: true
+        default: "eastus"
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: aks-lab-${{ inputs.resource_group }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy AKS 3-Node / 6-Pod Lab
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Azure login with OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Install kubectl
+        uses: azure/setup-kubectl@v4
+        with:
+          version: latest
+
+      - name: Verify Azure context
+        shell: bash
+        run: |
+          az account show --output table
+          az group show --name "${{ inputs.resource_group }}" --output table
+
+      - name: Run deployment automation
+        shell: pwsh
+        run: |
+          ./deploy-aks-3node-6pod-lab.ps1 `
+            -ResourceGroup '${{ inputs.resource_group }}' `
+            -AksName '${{ inputs.aks_name }}' `
+            -AcrName '${{ inputs.acr_name }}' `
+            -Location '${{ inputs.location }}' `
+            -NonInteractive
+
+      - name: Verify final cluster state
+        shell: bash
+        run: |
+          echo "=== Nodes ==="
+          kubectl get nodes -o wide
+          echo "=== Pods ==="
+          kubectl get pods -n aks-web-lab -o wide
+          echo "=== Service ==="
+          kubectl get service demo-web -n aks-web-lab -o wide
+          echo "=== Endpoints ==="
+          kubectl get endpoints demo-web -n aks-web-lab
+
+      - name: Publish deployment summary
+        shell: bash
+        run: |
+          IP=$(kubectl get service demo-web -n aks-web-lab -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+          {
+            echo "## AKS 3-Node / 6-Pod Lab"
+            echo ""
+            echo "### Public landing page"
+            echo "http://${IP}"
+            echo ""
+            echo "### Pods and Nodes"
+            echo '```text'
+            kubectl get pods -n aks-web-lab -o wide
+            echo '```'
+            echo ""
+            echo "### Service"
+            echo '```text'
+            kubectl get service demo-web -n aks-web-lab -o wide
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
