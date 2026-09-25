@@ -93,28 +93,30 @@ Each landing page identifies the Pod, Pod sequence, Pod IP, Node, and image refe
 
 ---
 
-# What You Will Learn
 
-This lab combines the following concepts in one end-to-end exercise:
+# Learning Objectives
 
-1. Azure Resource Groups
-2. Azure Container Registry
-3. Azure Kubernetes Service
-4. AKS node pools and VM sizing
-5. Kubernetes Namespaces
-6. ConfigMaps
-7. StatefulSets
-8. Stable StatefulSet Pod identities
-9. Services and Endpoints
-10. Azure Load Balancer
-11. Topology spread constraints
-12. Pod self-healing
-13. Node cordon and drain
-14. Pod rescheduling after node disruption
-15. GitHub Actions
-16. GitHub OIDC authentication to Azure
-17. AKS-to-ACR authentication
-18. Automated deployment and cleanup
+After completing this project, you should be able to explain:
+
+1. What Azure Container Registry does.
+2. How AKS authenticates to ACR.
+3. How GitHub Actions authenticates to Azure using OIDC.
+4. Why OIDC avoids long-lived cloud credentials in GitHub.
+5. What a StatefulSet is.
+6. Why StatefulSet Pods have stable ordinal names.
+7. How six Pods are distributed across three Nodes.
+8. How topology spread constraints influence scheduling.
+9. The difference between Pod identity and Node placement.
+10. How a Kubernetes Service selects Pod endpoints.
+11. How a LoadBalancer Service exposes an application through Azure.
+12. How multiple HTTP requests can reach different replicas.
+13. How Kubernetes recreates a deleted StatefulSet Pod.
+14. The difference between cordon and drain.
+15. How workload Pods can be rescheduled when a Node becomes unavailable.
+16. How GitHub Actions can automate Azure infrastructure and Kubernetes deployment.
+17. How to inspect Nodes, Pods, Services, and endpoints with `kubectl`.
+18. How automated cleanup can remove AKS and ACR while preserving the OIDC Resource Group.
+
 
 ---
 
@@ -1103,31 +1105,6 @@ Push approved image to ACR
    ↓
 Deploy exact image digest/tag to AKS
 ```
-
----
-
-# Learning Objectives
-
-After completing this project, you should be able to explain:
-
-1. What Azure Container Registry does.
-2. How AKS authenticates to ACR.
-3. How GitHub Actions authenticates to Azure using OIDC.
-4. Why OIDC avoids long-lived cloud credentials in GitHub.
-5. What a StatefulSet is.
-6. Why StatefulSet Pods have stable ordinal names.
-7. How six Pods are distributed across three Nodes.
-8. How topology spread constraints influence scheduling.
-9. The difference between Pod identity and Node placement.
-10. How a Kubernetes Service selects Pod endpoints.
-11. How a LoadBalancer Service exposes an application through Azure.
-12. How multiple HTTP requests can reach different replicas.
-13. How Kubernetes recreates a deleted StatefulSet Pod.
-14. The difference between cordon and drain.
-15. How workload Pods can be rescheduled when a Node becomes unavailable.
-16. How GitHub Actions can automate Azure infrastructure and Kubernetes deployment.
-17. How to inspect Nodes, Pods, Services, and endpoints with `kubectl`.
-18. How automated cleanup can remove AKS and ACR while preserving the OIDC Resource Group.
 
 ---
 
